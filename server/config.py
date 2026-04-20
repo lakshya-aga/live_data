@@ -79,8 +79,15 @@ class Settings(BaseSettings):
     # ── Corporate events ─────────────────────────────────────────────────
     corporate_events_poll_interval: int = 300
 
-    # ── Holdings ─────────────────────────────────────────────────────────
-    holdings_poll_interval: int = 86400
+    # ── Holdings / insider activity ──────────────────────────────────────
+    # Bulk and block deals settle intraday — poll frequently during market hours
+    bulk_block_poll_interval: int = 900    # 15 minutes
+    # SEBI insider trading disclosures are filed within 2 trading days of trade
+    sebi_insider_poll_interval: int = 3600  # 1 hour
+    # FII/DII data is published once at end of day
+    fii_dii_poll_interval: int = 3600      # 1 hour
+    # Politician/MyNeta holdings are election-cycle data; once a day is plenty
+    politician_holdings_poll_interval: int = 86400
 
     # ── Watchlist ────────────────────────────────────────────────────────
     watchlist: list[str] = Field(default_factory=lambda: _DEFAULT_WATCHLIST)

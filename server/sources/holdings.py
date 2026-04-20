@@ -85,6 +85,16 @@ _MIN_SHARE_VALUE = 100_000
 
 
 class HoldingsSource(BaseSource):
+    """
+    Umbrella source that spawns four independent polling loops, each with
+    its own cadence appropriate to how frequently the underlying data changes:
+
+      bulk/block deals   → 15 min  (intraday — filed same day)
+      SEBI insider       →  1 hour (must disclose within 2 trading days)
+      FII/DII flows      →  1 hour (published at EOD by NSE)
+      politician / MyNeta → 1 day  (election-cycle data)
+    """
+
     name = "holdings"
 
     def __init__(self, hub: Hub) -> None:
@@ -95,7 +105,7 @@ class HoldingsSource(BaseSource):
         connector = aiohttp.TCPConnector(ssl=False)
         async with aiohttp.ClientSession(headers=_HEADERS, connector=connector) as session:
             self._session = session
-            # Seed NSE cookies for bulk/block deal endpoints
+            # Seed NSE session cookie once
             try:
                 async with session.get(
                     _NSE_BASE,
@@ -106,16 +116,36 @@ class HoldingsSource(BaseSource):
             except Exception:
                 pass
 
-            while True:
-                await asyncio.gather(
-                    self._poll_bulk_deals(),
-                    self._poll_block_deals(),
-                    self._poll_fii_dii(),
-                    self._poll_sebi_insider(),
-                    self._emit_politician_holdings(),
-                    return_exceptions=True,
-                )
-                await asyncio.sleep(settings.holdings_poll_interval)
+            await asyncio.gather(
+                self._loop_bulk_block(),
+                self._loop_sebi_insider(),
+                self._loop_fii_dii(),
+                self._loop_politician_holdings(),
+            )
+
+    async def _loop_bulk_block(self) -> None:
+        while True:
+            await asyncio.gather(
+                self._poll_bulk_deals(),
+                self._poll_block_deals(),
+                return_exceptions=True,
+            )
+            await asyncio.sleep(settings.bulk_block_poll_interval)
+
+    async def _loop_sebi_insider(self) -> None:
+        while True:
+            await self._poll_sebi_insider()
+            await asyncio.sleep(settings.sebi_insider_poll_interval)
+
+    async def _loop_fii_dii(self) -> None:
+        while True:
+            await self._poll_fii_dii()
+            await asyncio.sleep(settings.fii_dii_poll_interval)
+
+    async def _loop_politician_holdings(self) -> None:
+        while True:
+            await self._emit_politician_holdings()
+            await asyncio.sleep(settings.politician_holdings_poll_interval)
 
     # ── NSE bulk deals ───────────────────────────────────────────────────
 
@@ -256,49 +286,100 @@ class HoldingsSource(BaseSource):
             except Exception as exc:
                 logger.debug("[holdings] FII/DII parse: %s", exc)
 
-    # ── SEBI insider trading disclosures ─────────────────────────────────
+    # ── SEBI / NSE insider trading disclosures ───────────────────────────
+    #
+    # Primary source: NSE's corporate filings API — returns structured JSON
+    # for all SAST Reg 29 / Insider Trading Reg disclosures filed on NSE.
+    #   GET /api/corporateInsiderTrading?symbol={sym}&type=all
+    #
+    # Fallback: SEBI website HTML (all companies, but HTML parsing)
+    #   GET https://www.sebi.gov.in/sebiweb/other/OtherAction.do?doInsidertrading=yes
 
     async def _poll_sebi_insider(self) -> None:
+        nse_headers = {**_HEADERS, "Referer": "https://www.nseindia.com/", "Accept": "application/json"}
+        now = datetime.now(tz=timezone.utc)
+
+        # Poll per symbol via NSE JSON endpoint (more structured)
+        for symbol in settings.watchlist:
+            url = f"{_NSE_BASE}/api/corporateInsiderTrading?symbol={symbol}&type=all"
+            try:
+                async with self._session.get(
+                    url, headers=nse_headers, timeout=aiohttp.ClientTimeout(total=10)
+                ) as r:
+                    data = await r.json(content_type=None)
+            except Exception as exc:
+                logger.debug("[holdings] NSE insider %s: %s", symbol, exc)
+                continue
+
+            for item in data.get("data", []):
+                key = f"insider_{symbol}_{item.get('acqName')}_{item.get('date')}"
+                if key in self._seen:
+                    continue
+                self._seen.add(key)
+                try:
+                    trade = InsiderTrade(
+                        symbol=symbol,
+                        acquirer_name=item.get("acqName", ""),
+                        acquirer_category=item.get("personCategory", ""),
+                        transaction_type=item.get("tdpTransactionType", ""),
+                        shares=_int(item.get("secAcq") or item.get("secSale")),
+                        value=_float(item.get("secVal")),
+                        pre_holding_pct=_float(item.get("befAcqSharesNo")),
+                        post_holding_pct=_float(item.get("afterAcqSharesNo")),
+                        trade_date=_parse_date(item.get("date")),
+                        disclosure_date=_parse_date(item.get("intimDate")),
+                        source_url=f"https://www.nseindia.com/companies-listing/corporate-filings-insider-trading",
+                    )
+                    await self.hub.publish(
+                        DataMessage(
+                            type=MessageType.INSIDER_TRADE,
+                            source=self.name,
+                            timestamp=now,
+                            symbols=[symbol],
+                            data=trade.model_dump(mode="json"),
+                        )
+                    )
+                except Exception as exc:
+                    logger.debug("[holdings] NSE insider parse %s: %s", symbol, exc)
+            await asyncio.sleep(0.1)
+
+        # Also hit SEBI directly as a supplement (catches disclosures not yet on NSE)
         try:
             async with self._session.get(
-                _SEBI_INSIDER,
-                timeout=aiohttp.ClientTimeout(total=20),
+                _SEBI_INSIDER, timeout=aiohttp.ClientTimeout(total=20)
             ) as r:
                 html = await r.text()
-        except Exception as exc:
-            logger.debug("[holdings] SEBI insider failed: %s", exc)
-            return
-
-        now = datetime.now(tz=timezone.utc)
-        rows = _parse_sebi_table(html)
-        for row in rows:
-            key = "_".join(str(v) for v in row.values())
-            if key in self._seen:
-                continue
-            self._seen.add(key)
-            try:
-                trade = InsiderTrade(
-                    symbol=row.get("symbol", "").upper(),
-                    acquirer_name=row.get("name", ""),
-                    acquirer_category=row.get("category", ""),
-                    transaction_type=row.get("transaction", ""),
-                    shares=_int(row.get("shares")),
-                    value=_float(row.get("value")),
-                    trade_date=_parse_date(row.get("trade_date")),
-                    disclosure_date=_parse_date(row.get("disclosure_date")),
-                    source_url=_SEBI_INSIDER,
-                )
-                await self.hub.publish(
-                    DataMessage(
-                        type=MessageType.INSIDER_TRADE,
-                        source=self.name,
-                        timestamp=now,
-                        symbols=[trade.symbol] if trade.symbol else [],
-                        data=trade.model_dump(mode="json"),
+            rows = _parse_sebi_table(html)
+            for row in rows:
+                key = "_".join(str(v) for v in row.values())
+                if key in self._seen:
+                    continue
+                self._seen.add(key)
+                try:
+                    trade = InsiderTrade(
+                        symbol=row.get("symbol", "").upper(),
+                        acquirer_name=row.get("name", ""),
+                        acquirer_category=row.get("category", ""),
+                        transaction_type=row.get("transaction", ""),
+                        shares=_int(row.get("shares")),
+                        value=_float(row.get("value")),
+                        trade_date=_parse_date(row.get("trade_date")),
+                        disclosure_date=_parse_date(row.get("disclosure_date")),
+                        source_url=_SEBI_INSIDER,
                     )
-                )
-            except Exception as exc:
-                logger.debug("[holdings] SEBI insider parse: %s", exc)
+                    await self.hub.publish(
+                        DataMessage(
+                            type=MessageType.INSIDER_TRADE,
+                            source=self.name,
+                            timestamp=now,
+                            symbols=[trade.symbol] if trade.symbol else [],
+                            data=trade.model_dump(mode="json"),
+                        )
+                    )
+                except Exception as exc:
+                    logger.debug("[holdings] SEBI insider parse: %s", exc)
+        except Exception as exc:
+            logger.debug("[holdings] SEBI insider fetch: %s", exc)
 
     # ── Politician holdings (MyNeta.info) ────────────────────────────────
 
