@@ -1,0 +1,7 @@
+member_name,house,constituency,party,symbol,company_name,shares,value,declaration_year,source_url
+# Place Parliament member shareholding declarations here.
+# Download from https://loksabha.nic.in/Members/MemberBioprofile.aspx
+# and https://rajyasabha.nic.in/rsnew/member_site/memberlist.aspx
+# Convert to this CSV format and re-run the server to emit disclosures.
+# Example row:
+# Gautam Adani (Family Trust),Lok Sabha,Ahmedabad West,BJP,ADANIENT,Adani Enterprises Ltd,100000,25000000,2024,https://loksabha.nic.in/...
