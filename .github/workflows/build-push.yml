@@ -1,15 +1,15 @@
 name: Build & push Docker image
 
-# Triggers:
-#   • Every push to main            → image tagged :main + :sha-<short>
-#   • Version tags (v1.2.3)         → image tagged :1.2.3, :1.2, :latest
-#   • Pull requests (build only, no push — verifies the Dockerfile compiles)
+# Triggers on every push to any branch and on version tags.
+# Every push produces a pushed image — check the Packages tab to see it.
+#
+# Tags produced:
+#   push to any branch  →  :<branch-name>  :sha-<short>
+#   version tag v1.2.3  →  :1.2.3  :1.2  :latest  :sha-<short>
 on:
   push:
-    branches: [main]
+    branches: ["**"]
     tags: ["v*"]
-  pull_request:
-    branches: [main]
 
 env:
   IMAGE: ghcr.io/lakshya-aga/live-data
@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write    # needed to push to ghcr.io
+      packages: write
 
     steps:
       - name: Checkout
@@ -29,7 +29,6 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Log in to GitHub Container Registry
-        if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -42,23 +41,20 @@ jobs:
         with:
           images: ${{ env.IMAGE }}
           tags: |
-            # branch push  →  :main
+            # branch push  →  :main  :feature-foo  etc.
             type=ref,event=branch
-            # PR           →  :pr-42
-            type=ref,event=pr
             # semver tag   →  :1.2.3  :1.2  :latest
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            # always add short SHA for traceability
+            # always add short SHA so every push is individually addressable
             type=sha,prefix=sha-,format=short
 
       - name: Build and push
         uses: docker/build-push-action@v5
         with:
           context: .
-          push: ${{ github.event_name != 'pull_request' }}
+          push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # Layer cache backed by GitHub Actions cache (free, per-branch)
           cache-from: type=gha
           cache-to: type=gha,mode=max

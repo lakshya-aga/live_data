@@ -111,18 +111,17 @@ docker run -d -p 8765:8765 --env-file .env live-data
 
 ### `build-push.yml` — automatic image build
 
-Triggers automatically on:
+Triggers automatically on **every push to any branch** and on version tags:
 
 | Event | Image tags produced |
 |---|---|
-| Push to `main` | `:main`, `:sha-<short>` |
+| Push to any branch | `:<branch-name>`, `:sha-<short>` |
 | Version tag `v1.2.3` | `:1.2.3`, `:1.2`, `:latest`, `:sha-<short>` |
-| Pull request | Build only (no push) — verifies the Dockerfile compiles |
 
-The image is published to `ghcr.io/lakshya-aga/live-data`.  
+The image is published to `ghcr.io/lakshya-aga/live-data` and visible under **Packages** on the GitHub repository page after each push.  
 No secrets are needed — it uses `GITHUB_TOKEN` automatically.
 
-To release a new version:
+To release a pinned version:
 
 ```bash
 git tag v1.0.0
