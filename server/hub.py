@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-@dataclass
+@dataclass(eq=False)   # use object identity for hashing so _Client is set-safe
 class _Client:
     ws: object
     channels: set[MessageType] = field(default_factory=set)

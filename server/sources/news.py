@@ -14,10 +14,11 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timezone
-from email.utils import parsedate_to_datetime
+
+import xml.etree.ElementTree as ET
+from email.utils import parsedate_to_datetime as _rfc2822
 
 import aiohttp
-import feedparser
 
 from server.config import settings
 from server.hub import Hub
@@ -173,17 +174,16 @@ class NewsSource(BaseSource):
             try:
                 async with self._session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as r:
                     content = await r.text()
-                feed = feedparser.parse(content)
-                for entry in feed.entries:
+                for entry in _parse_rss(content):
                     link = entry.get("link", "")
                     if link in self._seen:
                         continue
                     self._seen.add(link)
 
                     ts = datetime.now(tz=timezone.utc)
-                    if hasattr(entry, "published"):
+                    if entry.get("published"):
                         try:
-                            ts = parsedate_to_datetime(entry.published).astimezone(timezone.utc)
+                            ts = _rfc2822(entry["published"]).astimezone(timezone.utc)
                         except Exception:
                             pass
 
@@ -211,6 +211,41 @@ class NewsSource(BaseSource):
                     )
             except Exception as exc:
                 logger.debug("[news] RSS %s failed: %s", url, exc)
+
+
+def _parse_rss(xml_text: str) -> list[dict]:
+    """Parse RSS 2.0 / Atom feeds using stdlib ElementTree — no feedparser needed."""
+    entries: list[dict] = []
+    try:
+        root = ET.fromstring(xml_text)
+    except ET.ParseError:
+        return entries
+
+    ns = {"atom": "http://www.w3.org/2005/Atom"}
+
+    # RSS 2.0
+    for item in root.iter("item"):
+        _t = lambda tag: (item.findtext(tag) or "").strip()  # noqa: E731
+        entries.append({
+            "title": _t("title"),
+            "link": _t("link") or _t("guid"),
+            "summary": _t("description"),
+            "published": _t("pubDate"),
+        })
+
+    # Atom
+    for entry in root.iter("{http://www.w3.org/2005/Atom}entry"):
+        _t = lambda tag: (entry.findtext(tag, namespaces=ns) or "").strip()  # noqa: E731
+        link_el = entry.find("{http://www.w3.org/2005/Atom}link")
+        link = (link_el.get("href") if link_el is not None else "") or ""
+        entries.append({
+            "title": _t("{http://www.w3.org/2005/Atom}title"),
+            "link": link,
+            "summary": _t("{http://www.w3.org/2005/Atom}summary") or _t("{http://www.w3.org/2005/Atom}content"),
+            "published": _t("{http://www.w3.org/2005/Atom}published") or _t("{http://www.w3.org/2005/Atom}updated"),
+        })
+
+    return entries
 
 
 def _feed_label(url: str) -> str:
