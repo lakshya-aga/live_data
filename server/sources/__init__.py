@@ -1,3 +1,4 @@
+from .company import CompanySource
 from .corporate import CorporateSource
 from .financials import FinancialsSource
 from .gdelt import GdeltSource
@@ -14,4 +15,5 @@ __all__ = [
     "FinancialsSource",
     "CorporateSource",
     "HoldingsSource",
+    "CompanySource",
 ]

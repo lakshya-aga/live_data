@@ -26,6 +26,7 @@ import websockets
 from .config import settings
 from .hub import Hub
 from .sources import (
+    CompanySource,
     CorporateSource,
     FinancialsSource,
     GdeltSource,
@@ -74,6 +75,7 @@ async def _main() -> None:
         FinancialsSource(hub),
         CorporateSource(hub),
         HoldingsSource(hub),
+        CompanySource(hub),      # Shareholding patterns + director changes
     ]
 
     # Start all source tasks

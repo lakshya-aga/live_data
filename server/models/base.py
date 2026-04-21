@@ -21,6 +21,8 @@ class MessageType(str, Enum):
     BULK_DEAL = "bulk_deal"
     BLOCK_DEAL = "block_deal"
     POLITICIAN_DISCLOSURE = "politician_disclosure"
+    SHAREHOLDING_PATTERN = "shareholding_pattern"
+    DIRECTOR_CHANGE = "director_change"
     HEARTBEAT = "heartbeat"
 
 

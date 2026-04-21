@@ -9,6 +9,7 @@ from .holdings import (
     InsiderTrade,
     PoliticianDisclosure,
 )
+from .company import DirectorChange, DirectorInfo, ShareholdingPattern
 from .news import NewsItem
 from .price import IndexData, MarketStatus, OrderBook, PriceTick
 
@@ -34,4 +35,7 @@ __all__ = [
     "BlockDeal",
     "FIIDIIFlow",
     "PoliticianDisclosure",
+    "ShareholdingPattern",
+    "DirectorInfo",
+    "DirectorChange",
 ]

@@ -214,6 +214,54 @@ async def _emit_insider_trades():
         await asyncio.sleep(15)
 
 
+async def _emit_shareholding():
+    """Emit shareholding pattern for each symbol on startup, then every 30 s."""
+    patterns = [
+        ("RELIANCE",  50.49, 0.0,  22.81, 14.20, 9.12, 12.50),
+        ("TCS",       72.19, 0.0,  12.40,  8.30, 6.20,  7.11),
+        ("INFY",      14.77, 0.0,  34.12, 20.15, 14.30, 30.96),
+        ("HDFCBANK",   0.00, 0.0,  27.60, 24.30, 18.20, 48.10),
+        ("ICICIBANK",  0.00, 0.0,  43.50, 16.80, 12.40, 39.70),
+    ]
+    i = 0
+    while True:
+        sym, promo, pledged, fii, dii, mf, pub = patterns[i % len(patterns)]
+        sp = {
+            "symbol": sym, "exchange": "NSE", "quarter": "Dec 2024",
+            "as_of": _now(),
+            "promoter_pct": promo, "promoter_pledged_pct": pledged,
+            "fii_pct": fii, "dii_pct": dii, "mutual_fund_pct": mf,
+            "public_pct": pub, "total_shares": random.randint(50_000_000, 5_000_000_000),
+        }
+        await _broadcast("shareholding_pattern", [sym], sp)
+        i += 1
+        await asyncio.sleep(30)
+
+
+async def _emit_director_changes():
+    """Emit a director change every 60 s (rare events in practice)."""
+    changes = [
+        ("RELIANCE",  "Hital R Meswani",   "Executive Director",  "00001699", "appointment"),
+        ("TCS",       "K Krithivasan",      "CEO & MD",            "08452290", "appointment"),
+        ("INFY",      "Salil Parekh",       "CEO & MD",            "01876159", "appointment"),
+        ("HDFCBANK",  "Sashidhar Jagdishan","MD & CEO",            "00004514", "appointment"),
+    ]
+    i = 0
+    first = True
+    while True:
+        if not first:
+            await asyncio.sleep(60)
+        first = False
+        sym, name, desig, din, ctype = changes[i % len(changes)]
+        dc = {
+            "symbol": sym, "exchange": "NSE", "name": name,
+            "designation": desig, "din": din, "change_type": ctype,
+            "effective_date": None, "announced_at": _now(),
+        }
+        await _broadcast("director_change", [sym], dc)
+        i += 1
+
+
 # ── Hub ───────────────────────────────────────────────────────────────────
 
 async def _broadcast(type_, symbols, data):
@@ -269,6 +317,8 @@ async def main():
             _emit_gdelt(),
             _emit_corporate_events(),
             _emit_insider_trades(),
+            _emit_shareholding(),
+            _emit_director_changes(),
             stop.wait(),
             return_exceptions=True,
         )

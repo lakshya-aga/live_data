@@ -89,6 +89,12 @@ class Settings(BaseSettings):
     # Politician/MyNeta holdings are election-cycle data; once a day is plenty
     politician_holdings_poll_interval: int = 86400
 
+    # ── Company / governance data ────────────────────────────────────────
+    # Shareholding pattern is filed quarterly; poll every 6 hours to catch filings
+    shareholding_poll_interval: int = 21600   # 6 hours
+    # Board composition changes are rare; once a day is sufficient
+    board_poll_interval: int = 86400          # 24 hours
+
     # ── Watchlist ────────────────────────────────────────────────────────
     watchlist: list[str] = Field(default_factory=lambda: _DEFAULT_WATCHLIST)
 
