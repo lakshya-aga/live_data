@@ -1,0 +1,28 @@
+services:
+  live-data:
+    image: ghcr.io/lakshya-aga/live-data:main   # built by CI; override with :v1.2.3 for pinned releases
+    restart: unless-stopped
+    ports:
+      - "8765:8765"
+    env_file:
+      - .env          # copy .env.example → .env and fill in your credentials
+    volumes:
+      - ./data:/app/data    # persists politician-holdings cache between restarts
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import socket; s=socket.create_connection(('localhost',8765),timeout=3); s.close()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # Optional: run the notebook mock server alongside for local testing
+  mock:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: python notebooks/mock_server.py
+    ports:
+      - "8766:8765"
+    profiles:
+      - dev       # only starts with: docker compose --profile dev up

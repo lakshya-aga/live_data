@@ -1,0 +1,64 @@
+name: Build & push Docker image
+
+# Triggers:
+#   • Every push to main            → image tagged :main + :sha-<short>
+#   • Version tags (v1.2.3)         → image tagged :1.2.3, :1.2, :latest
+#   • Pull requests (build only, no push — verifies the Dockerfile compiles)
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+
+env:
+  IMAGE: ghcr.io/lakshya-aga/live-data
+
+jobs:
+  build-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write    # needed to push to ghcr.io
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract image metadata (tags + labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            # branch push  →  :main
+            type=ref,event=branch
+            # PR           →  :pr-42
+            type=ref,event=pr
+            # semver tag   →  :1.2.3  :1.2  :latest
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            # always add short SHA for traceability
+            type=sha,prefix=sha-,format=short
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Layer cache backed by GitHub Actions cache (free, per-branch)
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
