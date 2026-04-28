@@ -4,16 +4,15 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _DEFAULT_WATCHLIST = [
-    "RELIANCE", "TCS", "INFY", "HDFCBANK", "ICICIBANK",
-    "KOTAKBANK", "SBIN", "BAJFINANCE", "BHARTIARTL", "LT",
-    "ASIANPAINT", "MARUTI", "TITAN", "ULTRACEMCO", "NESTLEIND",
-    "WIPRO", "HCLTECH", "TECHM", "POWERGRID", "NTPC",
-    "AXISBANK", "ITC", "SUNPHARMA", "DRREDDY", "TATAMOTORS",
-    "TATASTEEL", "HINDALCO", "JSWSTEEL", "ONGC", "BPCL",
-    "ADANIENT", "ADANIPORTS", "BAJAJFINSV", "BRITANNIA", "CIPLA",
-    "DIVISLAB", "EICHERMOT", "GRASIM", "HDFCLIFE", "HEROMOTOCO",
-    "INDUSINDBK", "LTIM", "MM", "PIDILITIND", "SBILIFE",
-    "SHREECEM", "TATACONSUM", "UPL", "VEDL", "ZOMATO",
+    # Trimmed sample set — six high-liquidity tickers covering banks, IT,
+    # energy, and consumer. Override via the WATCHLIST env var when running
+    # against a real account.
+    "RELIANCE",
+    "TCS",
+    "INFY",
+    "HDFCBANK",
+    "ICICIBANK",
+    "SBIN",
 ]
 
 _DEFAULT_GDELT_THEMES = [
@@ -97,6 +96,16 @@ class Settings(BaseSettings):
 
     # ── Watchlist ────────────────────────────────────────────────────────
     watchlist: list[str] = Field(default_factory=lambda: _DEFAULT_WATCHLIST)
+
+    # ── Index whitelist ──────────────────────────────────────────────────
+    # NSE's /api/allIndices returns ~80 indices; we only stream the three
+    # the platform actually trades against. Names are matched against
+    # entry["index"] with whitespace + case folded so common variants
+    # ("NIFTY BANK" vs "NIFTYBANK", "NIFTY FIN SERVICE" vs "FINNIFTY")
+    # all resolve.
+    indices_watchlist: list[str] = Field(
+        default_factory=lambda: ["NIFTY 50", "NIFTY BANK", "NIFTY FIN SERVICE"]
+    )
 
     # ── Logging ──────────────────────────────────────────────────────────
     log_level: str = "INFO"

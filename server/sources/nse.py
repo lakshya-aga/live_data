@@ -124,7 +124,15 @@ class NSESource(BaseSource):
         if not data:
             return
         now = datetime.now(tz=timezone.utc)
+        # Build a normalised lookup of allowed names so "NIFTY 50" / "Nifty50"
+        # / "NIFTY50" all match the same whitelist entry.
+        allowed = {
+            "".join(s.split()).upper() for s in settings.indices_watchlist
+        }
         for entry in data.get("data", []):
+            name = entry.get("index", "")
+            if "".join(name.split()).upper() not in allowed:
+                continue
             try:
                 idx = IndexData(
                     name=entry["index"],
