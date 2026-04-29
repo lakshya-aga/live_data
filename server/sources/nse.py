@@ -1,17 +1,19 @@
 """
-NSE public data source — polling-based fallback for price ticks and index data.
+NSE public data source — polls market status + indices.
 
-NSE's website requires a valid session cookie before any API call will return
-JSON instead of a redirect.  We obtain the cookie by hitting the homepage
-once, then reuse it for subsequent calls.  The cookie is refreshed every
-30 minutes to avoid expiry.
+Price ticks come exclusively from Groww (server.sources.groww). NSE has
+been removed from the price path entirely; this module only emits
+MarketStatus and IndexData messages.
+
+NSE's website requires a valid session cookie before any API call will
+return JSON instead of a redirect. We obtain the cookie by hitting the
+homepage once, then reuse it for subsequent calls. The cookie is
+refreshed every 30 minutes to avoid expiry.
 
 Endpoints used
 --------------
   GET /api/market-status               → MarketStatus
   GET /api/allIndices                  → list[IndexData]
-  GET /api/quote-equity?symbol={sym}   → PriceTick
-  GET /api/quote-equity?symbol={sym}&section=trade_info  → order book hints
 """
 
 from __future__ import annotations
@@ -25,7 +27,7 @@ import aiohttp
 from server.config import settings
 from server.hub import Hub
 from server.models.base import DataMessage, MessageType
-from server.models.price import IndexData, MarketStatus, PriceTick
+from server.models.price import IndexData, MarketStatus
 
 from .base import BaseSource
 
@@ -59,10 +61,12 @@ class NSESource(BaseSource):
             self._session = session
             await self._refresh_cookies()
             while True:
+                # Price ticks come from Groww only — NSE polls market status
+                # and indices but never publishes price_tick messages, even
+                # when Groww auth is unavailable.
                 await asyncio.gather(
                     self._poll_market_status(),
                     self._poll_indices(),
-                    self._poll_quotes(),
                 )
                 await asyncio.sleep(settings.nse_poll_interval)
                 import time
@@ -159,39 +163,3 @@ class NSESource(BaseSource):
             except Exception as exc:
                 logger.debug("[nse] index parse error: %s", exc)
 
-    async def _poll_quotes(self) -> None:
-        for symbol in settings.watchlist:
-            data = await self._get(f"/api/quote-equity?symbol={symbol}")
-            if not data:
-                continue
-            now = datetime.now(tz=timezone.utc)
-            try:
-                pd_ = data.get("priceInfo", {})
-                info = data.get("info", {})
-                tick = PriceTick(
-                    symbol=symbol,
-                    ltp=float(pd_.get("lastPrice", 0)),
-                    change=float(pd_.get("change", 0)),
-                    change_pct=float(pd_.get("pChange", 0)),
-                    open=float(pd_.get("open", 0)),
-                    high=float(pd_.get("intraDayHighLow", {}).get("max", 0)),
-                    low=float(pd_.get("intraDayHighLow", {}).get("min", 0)),
-                    prev_close=float(pd_.get("previousClose", 0)),
-                    volume=int(data.get("marketDeptOrderBook", {}).get("tradeInfo", {}).get("totalTradedVolume", 0)),
-                    week_52_high=float(pd_.get("weekHighLow", {}).get("max", 0)) or None,
-                    week_52_low=float(pd_.get("weekHighLow", {}).get("min", 0)) or None,
-                    trade_time=now,
-                )
-                await self.hub.publish(
-                    DataMessage(
-                        type=MessageType.PRICE_TICK,
-                        source=self.name,
-                        timestamp=now,
-                        symbols=[symbol],
-                        data=tick.model_dump(mode="json"),
-                    )
-                )
-            except Exception as exc:
-                logger.debug("[nse] quote parse error for %s: %s", symbol, exc)
-            # Avoid hammering NSE — tiny sleep between symbols
-            await asyncio.sleep(0.1)

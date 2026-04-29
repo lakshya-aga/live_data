@@ -39,6 +39,28 @@ from .sources import (
 logger = structlog.get_logger(__name__)
 
 
+class _DropTcpProbeHandshakeFailures(logging.Filter):
+    """Drop the multi-frame stack trace produced by TCP-only health probes.
+
+    Render / Railway / Cloud Run / Kubernetes liveness probes open a TCP
+    socket and close it without sending an HTTP request line. The websockets
+    library treats that as an `InvalidMessage` and dumps the entire
+    `EOFError → InvalidMessage → opening handshake failed` traceback at
+    ERROR level, once per probe — about 60–120 times an hour on most hosts.
+    The connection itself is not a problem (no client could ever consume
+    this socket anyway), it's just log noise. We filter out exactly this
+    exception class so genuine handshake failures still surface.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        exc = record.exc_info[1] if record.exc_info else None
+        if exc is None:
+            return True
+        # Match by class name to avoid importing websockets.exceptions twice
+        # in case the library reorganises submodules between minor versions.
+        return type(exc).__name__ != "InvalidMessage"
+
+
 def _configure_logging() -> None:
     level = getattr(logging, settings.log_level.upper(), logging.INFO)
     processors = [
@@ -61,6 +83,8 @@ def _configure_logging() -> None:
     # Silence noisy libraries
     for noisy in ("aiohttp", "websockets", "feedparser", "httpx"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
+    # Drop the TCP-probe traceback floods specifically.
+    logging.getLogger("websockets.server").addFilter(_DropTcpProbeHandshakeFailures())
 
 
 async def _main() -> None:
@@ -68,8 +92,8 @@ async def _main() -> None:
     hub = Hub()
 
     sources = [
-        GrowwSource(hub),    # Primary: live GROWW WebSocket (falls back gracefully)
-        NSESource(hub),      # Supplement: NSE REST polling (indices, fallback quotes)
+        GrowwSource(hub),    # Sole price source: live GROWW WebSocket
+        NSESource(hub),      # Market status + indices only — no price ticks
         GdeltSource(hub),
         NewsSource(hub),
         FinancialsSource(hub),
