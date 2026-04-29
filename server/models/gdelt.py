@@ -21,6 +21,12 @@ class GdeltArticle(BaseModel):
     # NSE symbols extracted from article (heuristic)
     symbols: list[str] = []
     image_url: str = ""
+    # Provenance: which named GDELT query produced this article. The UI shows
+    # the label as a badge and the raw query string in a tooltip so users can
+    # see exactly what was searched.
+    query_label: str = ""
+    query_category: str = ""  # "country" | "stock" | "industry"
+    query_string: str = ""
 
 
 class GdeltToneTimeline(BaseModel):
