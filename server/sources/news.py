@@ -56,19 +56,26 @@ class NewsSource(BaseSource):
     def __init__(self, hub: Hub) -> None:
         super().__init__(hub)
         self._seen: set[str] = set()
+        self._cookie_ts: float = 0.0
 
     async def _run(self) -> None:
         connector = aiohttp.TCPConnector(ssl=False)
         async with aiohttp.ClientSession(headers=_HEADERS, connector=connector) as session:
             self._session = session
-            # Seed NSE cookies
-            try:
-                async with session.get(_NSE_HOMEPAGE, timeout=aiohttp.ClientTimeout(total=10)) as r:
-                    await r.read()
-            except Exception:
-                pass
+            await self._refresh_nse_cookies()
 
             while True:
+                # Bound the dedup set so a long-running server doesn't grow
+                # unbounded. 5k entries is enough to span days of activity.
+                if len(self._seen) > 5000:
+                    self._seen.clear()
+
+                # NSE cookies expire roughly every 5 minutes, so refresh on a
+                # 4-minute cadence to stay ahead of expiry.
+                import time as _time
+                if _time.monotonic() - self._cookie_ts > 240:
+                    await self._refresh_nse_cookies()
+
                 await asyncio.gather(
                     self._poll_nse_announcements(),
                     self._poll_bse_announcements(),
@@ -77,16 +84,39 @@ class NewsSource(BaseSource):
                 )
                 await asyncio.sleep(settings.news_poll_interval)
 
+    async def _refresh_nse_cookies(self) -> None:
+        import time as _time
+        try:
+            async with self._session.get(
+                _NSE_HOMEPAGE, timeout=aiohttp.ClientTimeout(total=10)
+            ) as r:
+                await r.read()
+            self._cookie_ts = _time.monotonic()
+            logger.debug("[news] NSE cookies refreshed (status=%s)", r.status)
+        except Exception as exc:
+            logger.warning("[news] NSE cookie refresh failed: %s", exc)
+
     # ── NSE announcements ────────────────────────────────────────────────
 
     async def _poll_nse_announcements(self) -> None:
+        # NSE returns 401/403 with HTML when cookies expire — log the body
+        # so we can tell the difference between "no announcements today" and
+        # "session-cookie auth broken".
         try:
             async with self._session.get(
                 _NSE_ANNOUNCEMENTS, timeout=aiohttp.ClientTimeout(total=15)
             ) as r:
+                ct = (r.headers.get("content-type") or "").lower()
+                if r.status >= 400 or "json" not in ct:
+                    body = (await r.text())[:240].replace("\n", " ")
+                    logger.warning(
+                        "[news] NSE announcements non-JSON (status=%s, ct=%s): %s",
+                        r.status, ct, body,
+                    )
+                    return
                 data = await r.json(content_type=None)
         except Exception as exc:
-            logger.debug("[news] NSE announcements failed: %s", exc)
+            logger.warning("[news] NSE announcements failed: %s", exc)
             return
 
         for item in data.get("data", []):
@@ -130,12 +160,28 @@ class NewsSource(BaseSource):
                 headers=_BSE_HEADERS,
                 timeout=aiohttp.ClientTimeout(total=15),
             ) as r:
+                ct = (r.headers.get("content-type") or "").lower()
+                if r.status >= 400 or "json" not in ct:
+                    body = (await r.text())[:240].replace("\n", " ")
+                    logger.warning(
+                        "[news] BSE announcements non-JSON (status=%s, ct=%s): %s",
+                        r.status, ct, body,
+                    )
+                    return
                 data = await r.json(content_type=None)
         except Exception as exc:
-            logger.debug("[news] BSE announcements failed: %s", exc)
+            logger.warning("[news] BSE announcements failed: %s", exc)
             return
 
-        for item in data.get("Table", []):
+        # BSE has wrapped the payload as {"Table": [...]} historically, but
+        # also as {"d": {"Table": [...]}} in some periods. Handle both.
+        rows = data.get("Table")
+        if rows is None and isinstance(data.get("d"), dict):
+            rows = data["d"].get("Table")
+        if rows is None:
+            logger.warning("[news] BSE response missing Table key; keys=%s", list(data.keys())[:8])
+            return
+        for item in rows:
             key = str(item.get("NewsID", "")) or item.get("HEADLINE", "")
             if key in self._seen:
                 continue
@@ -210,7 +256,7 @@ class NewsSource(BaseSource):
                         )
                     )
             except Exception as exc:
-                logger.debug("[news] RSS %s failed: %s", url, exc)
+                logger.warning("[news] RSS %s failed: %s", url, exc)
 
 
 def _parse_rss(xml_text: str) -> list[dict]:
