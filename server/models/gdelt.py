@@ -27,6 +27,14 @@ class GdeltArticle(BaseModel):
     query_label: str = ""
     query_category: str = ""  # "country" | "stock" | "industry"
     query_string: str = ""
+    # Query-level sentiment aggregates from GDELT's tonechart endpoint
+    # (mode=tonechart). artlist mode does not return a per-article tone, so
+    # the frontend uses these fields — every article in a given query carries
+    # the same group-level numbers, and the dashboard reads the latest one.
+    query_total: int = 0
+    query_positive: int = 0    # bin > 0
+    query_neutral: int = 0     # bin == 0
+    query_negative: int = 0    # bin < 0
 
 
 class GdeltToneTimeline(BaseModel):

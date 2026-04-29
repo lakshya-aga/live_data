@@ -216,7 +216,25 @@ class GdeltSource(BaseSource):
 
         total_new = 0
         for q in GDELT_CATALOGUE:
+            # Fire artlist + tonechart back-to-back for each query. artlist
+            # returns no per-article tone (GDELT just doesn't include it in
+            # that mode), so tonechart is the only way to get sentiment. We
+            # attach the aggregate stats to every article as `tone` and
+            # `query_*` counts so the frontend dashboard can read them off
+            # the latest article per group.
             articles = await self._fetch_articles(q)
+            await asyncio.sleep(_QUERY_SPACING)
+            agg = await self._fetch_tonechart(q)
+            await asyncio.sleep(_QUERY_SPACING)
+
+            mean_tone = agg["mean"] if agg["total"] > 0 else None
+            for art in articles:
+                art.tone = mean_tone
+                art.query_total = agg["total"]
+                art.query_positive = agg["positive"]
+                art.query_neutral = agg["neutral"]
+                art.query_negative = agg["negative"]
+
             new_count = 0
             for art in articles:
                 if art.url in self._seen:
@@ -233,11 +251,67 @@ class GdeltSource(BaseSource):
                     )
                 )
             total_new += new_count
-            logger.debug("[gdelt] %s → %d articles (%d new)", q.label, len(articles), new_count)
-            await asyncio.sleep(_QUERY_SPACING)
+            logger.debug(
+                "[gdelt] %s → %d articles (%d new); tone mean=%s total=%s",
+                q.label, len(articles), new_count, mean_tone, agg["total"],
+            )
 
         logger.info("[gdelt] poll cycle complete: %d new articles across %d queries",
                     total_new, len(GDELT_CATALOGUE))
+
+    async def _fetch_tonechart(self, q: GdeltQuery) -> dict:
+        """Return aggregate tone stats for one query via GDELT's tonechart mode.
+
+        Shape: ``{"total": int, "mean": float, "positive": int, "neutral": int,
+        "negative": int}``. Returns zeroed values on any error so the caller
+        can attach them unconditionally.
+        """
+        zero = {"total": 0, "mean": 0.0, "positive": 0, "neutral": 0, "negative": 0}
+        params = {
+            "query": q.query,
+            "mode": "tonechart",
+            "format": "json",
+            "timespan": "1d",
+        }
+        url = _API + "?" + "&".join(f"{k}={quote_plus(str(v))}" for k, v in params.items())
+        try:
+            async with self._session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as r:
+                ct = (r.headers.get("content-type") or "").lower()
+                body = await r.text()
+                if r.status == 429:
+                    logger.warning("[gdelt] tonechart rate-limited on %s", q.label)
+                    return zero
+                if "json" not in ct:
+                    logger.warning(
+                        "[gdelt] tonechart non-JSON for %s (status=%s, ct=%s): %s",
+                        q.label, r.status, ct, body[:200].replace("\n", " "),
+                    )
+                    return zero
+                data = _json.loads(body)
+        except Exception as exc:
+            logger.warning("[gdelt] tonechart fetch failed for %s: %s", q.label, exc)
+            return zero
+
+        bins = data.get("tonechart") or []
+        total = 0
+        weighted = 0.0
+        pos = neu = neg = 0
+        for entry in bins:
+            try:
+                b = int(entry.get("bin", 0))
+                c = int(entry.get("count", 0))
+            except Exception:
+                continue
+            total += c
+            weighted += b * c
+            if b > 0:
+                pos += c
+            elif b < 0:
+                neg += c
+            else:
+                neu += c
+        mean = (weighted / total) if total > 0 else 0.0
+        return {"total": total, "mean": mean, "positive": pos, "neutral": neu, "negative": neg}
 
     async def _fetch_articles(self, q: GdeltQuery) -> list[GdeltArticle]:
         params = {
