@@ -104,7 +104,14 @@ class Settings(BaseSettings):
     # ("NIFTY BANK" vs "NIFTYBANK", "NIFTY FIN SERVICE" vs "FINNIFTY")
     # all resolve.
     indices_watchlist: list[str] = Field(
-        default_factory=lambda: ["NIFTY 50", "NIFTY BANK", "NIFTY FIN SERVICE"]
+        default_factory=lambda: [
+            "NIFTY 50",
+            "NIFTY BANK",
+            "NIFTY FIN SERVICE",
+            # India VIX — implied-volatility gauge; the Explore dashboard
+            # surfaces it as a "fear/calm" tile alongside the equity indices.
+            "INDIA VIX",
+        ]
     )
 
     # ── Logging ──────────────────────────────────────────────────────────
